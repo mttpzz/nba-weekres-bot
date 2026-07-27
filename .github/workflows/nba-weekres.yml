@@ -1,0 +1,50 @@
+name: nba-weekres
+
+on:
+  schedule:
+    # GitHub Actions cron runs on fixed UTC, but Italy switches between
+    # UTC+1 (CET, winter) and UTC+2 (CEST, summer). Two schedules keep
+    # the 9:00 local time accurate in both periods (the only imprecise
+    # week is the exact DST switchover, end of March / end of October).
+    - cron: '0 8 * 11,12,1,2,3 1'    # Nov-Mar: 08:00 UTC = 09:00 CET
+    - cron: '0 7 * 4,5,6,7,8,9,10 1' # Apr-Oct: 07:00 UTC = 09:00 CEST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+# Serialize runs so a manual workflow_dispatch can't overlap the scheduled
+# run (or another dispatch): without this, two concurrent jobs would both
+# send the Telegram digest and then race pushing state.json.
+concurrency:
+  group: ${{ github.workflow }}
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run digest
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m nba_weekres.main
+
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git diff --staged --quiet || git commit -m "chore: update last sent date [skip ci]"
+          git pull --rebase
+          git push
